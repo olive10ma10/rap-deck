@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ラップデッキ">
+<meta name="theme-color" content="#0b0b0f">
+<title>ラップデッキ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-screen="library">
+
+<!-- ライブラリ -->
+<main id="library" class="screen">
+  <header class="bar">
+    <h1>ラップデッキ</h1>
+    <label class="btn primary">＋ 曲を追加
+      <input id="pick" type="file" multiple accept="audio/*,video/mp4,.m4a,.wav,.mp3" hidden>
+    </label>
+  </header>
+  <div id="searchWrap" hidden><input id="search" type="search" placeholder="曲名で探す"></div>
+  <div id="songs"></div>
+  <div id="empty" class="empty" hidden>
+    <div class="vinyl-mini"></div>
+    <p><b>「＋ 曲を追加」</b>から、ファイルアプリにあるビートや原曲を選んでください。<br>いくつでも一度に選べます。</p>
+    <p class="hint">ファイル名を <code>曲名 - ビート</code> ／ <code>曲名 - 原曲</code> ／ <code>曲名 - 声のみ</code> にしておくと、自動で1曲にまとまります。<br>曲はこのスマホの中だけに保存されます。</p>
+  </div>
+</main>
+
+<!-- プレイヤー -->
+<main id="player" class="screen">
+  <header class="bar">
+    <button id="back" class="icon" aria-label="戻る">‹</button>
+    <h2 id="pTitle"></h2>
+    <button id="edit" class="btn">調整</button>
+  </header>
+  <div id="layers"></div>
+  <div class="wavewrap">
+    <canvas id="wave"></canvas>
+  </div>
+  <div class="info">
+    <span id="time">0:00 / 0:00</span>
+    <span id="counter"></span>
+    <span><span id="beatDot"></span><span id="bpm"></span></span>
+  </div>
+  <div class="info sub"><span id="entryInfo"></span><span id="status"></span></div>
+
+  <div class="deck">
+    <button id="cut" aria-label="カット">CUT</button>
+    <div class="platter">
+      <div id="disc">
+        <div class="mark"></div>
+        <div class="label"><span id="discLabel"></span></div>
+      </div>
+      <div id="count"></div>
+    </div>
+  </div>
+
+  <nav class="transport">
+    <button id="toEntry" title="入りの2小節前から">⏮<small>入り前</small></button>
+    <button id="prevBar">−1<small>小節</small></button>
+    <button id="play" class="playbtn">▶</button>
+    <button id="nextBar">+1<small>小節</small></button>
+    <button id="loop">🔁</button>
+  </nav>
+</main>
+
+<div id="scrim" hidden></div>
+
+<section id="importSheet" class="sheet" hidden>
+  <header><h3>取り込み</h3><button class="icon" data-close>×</button></header>
+  <p class="hint">種類（ビート・原曲・声のみ）と、どの曲に入れるかを確認してください。</p>
+  <div id="importBody"></div>
+  <footer><button id="importGo" class="primary wide">保存</button></footer>
+</section>
+
+<section id="editSheet" class="sheet" hidden>
+  <header><h3>調整</h3><button class="icon" data-close>×</button></header>
+  <div id="editBody"></div>
+</section>
+
+<div id="toast"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
