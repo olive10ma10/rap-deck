@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -14,31 +14,52 @@
 <link rel="icon" href="icon-192.png">
 <link rel="stylesheet" href="style.css">
 </head>
-<body data-screen="library">
+<body data-screen="library" data-mode="dj">
 
 <!-- ライブラリ -->
 <main id="library" class="screen">
   <header class="bar">
-    <h1>ラップデッキ</h1>
-    <label class="btn primary">＋ 曲を追加
+    <h1><span class="logo-dot"></span>ラップデッキ</h1>
+    <label class="btn primary" data-icon="plus">曲を追加
       <input id="pick" type="file" multiple accept="audio/*,video/mp4,.m4a,.wav,.mp3" hidden>
     </label>
   </header>
-  <div id="searchWrap" hidden><input id="search" type="search" placeholder="曲名で探す"></div>
+
+  <div id="install" class="notice" hidden>
+    <span data-icon="smartphone"></span>
+    <p>共有ボタン <span class="inline-ic" data-icon="share"></span> →「ホーム画面に追加」から開くと、電波が無くても使えて、保存した曲も消えにくくなります。</p>
+    <button id="installClose" class="icon-btn" aria-label="閉じる" data-icon="x"></button>
+  </div>
+
+  <div class="lib-tools">
+    <div id="searchWrap" class="search" hidden>
+      <span data-icon="search"></span>
+      <input id="search" type="search" placeholder="曲名で探す" inputmode="search" enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </div>
+    <button id="playAll" class="btn" data-icon="list-music" hidden>全部流す</button>
+  </div>
+
   <div id="songs"></div>
+
   <div id="empty" class="empty" hidden>
     <div class="vinyl-mini"></div>
-    <p><b>「＋ 曲を追加」</b>から、ファイルアプリにあるビートや原曲を選んでください。<br>いくつでも一度に選べます。</p>
+    <p><b>「曲を追加」</b>から、ファイルアプリにあるビートや原曲を選んでください。<br>いくつでも一度に選べます。</p>
     <p class="hint">ファイル名を <code>曲名 - ビート</code> ／ <code>曲名 - 原曲</code> ／ <code>曲名 - 声のみ</code> にしておくと、自動で1曲にまとまります。<br>曲はこのスマホの中だけに保存されます。</p>
   </div>
+
+  <footer class="lib-foot"><button id="aboutBtn" class="link" data-icon="info">使っているもの</button></footer>
 </main>
 
 <!-- プレイヤー -->
 <main id="player" class="screen">
   <header class="bar">
-    <button id="back" class="icon" aria-label="戻る">‹</button>
+    <button id="back" class="icon-btn" aria-label="戻る" data-icon="chevron-left"></button>
     <h2 id="pTitle"></h2>
-    <button id="edit" class="btn">調整</button>
+    <div id="modeSeg" class="seg" role="tablist">
+      <button data-mode="dj" data-icon="disc-3">DJ</button>
+      <button data-mode="listen" data-icon="headphones">聴く</button>
+    </div>
+    <button id="edit" class="icon-btn" aria-label="調整" data-icon="settings-2"></button>
   </header>
   <div id="layers"></div>
   <div class="wavewrap">
@@ -51,38 +72,72 @@
   </div>
   <div class="info sub"><span id="entryInfo"></span><span id="status"></span></div>
 
-  <div class="deck">
-    <button id="cut" aria-label="カット">CUT</button>
-    <div class="platter">
-      <div id="disc">
-        <div class="mark"></div>
-        <div class="label"><span id="discLabel"></span></div>
+  <div class="stage">
+    <!-- DJ：レコードをこする -->
+    <div class="deck">
+      <button id="cut" aria-label="カット" data-icon="scissors">CUT</button>
+      <div class="platter">
+        <div id="disc">
+          <div class="mark"></div>
+          <div class="label"><span id="discLabel"></span></div>
+        </div>
+        <div class="count"></div>
       </div>
-      <div id="count"></div>
+    </div>
+    <!-- 聴く：画面を消しても流れる -->
+    <div class="listen">
+      <div class="cover"><span id="coverTitle"></span><div class="count"></div></div>
+      <p class="hint center">画面を消しても流れ続けます。ロック画面からも操作できます。</p>
+      <div class="next-row">
+        <div class="next-info"><small>次の曲</small><span id="nextTitle">—</span></div>
+        <button id="nextBtn" class="icon-btn" aria-label="次の曲" data-icon="skip-forward"></button>
+      </div>
+      <label class="switch"><input id="autoNext" type="checkbox">終わったら次の曲へ</label>
     </div>
   </div>
 
   <nav class="transport">
-    <button id="toEntry" title="入りの2小節前から">⏮<small>入り前</small></button>
-    <button id="prevBar">−1<small>小節</small></button>
-    <button id="play" class="playbtn">▶</button>
-    <button id="nextBar">+1<small>小節</small></button>
-    <button id="loop">🔁</button>
+    <button id="toEntry" data-icon="skip-back"><small>入り前</small></button>
+    <button id="prevBar" data-icon="chevrons-left"><small>1小節</small></button>
+    <button id="play" class="playbtn" aria-label="再生"></button>
+    <button id="nextBar" data-icon="chevrons-right"><small>1小節</small></button>
+    <button id="loop"></button>
   </nav>
 </main>
 
-<div id="scrim" hidden></div>
-
-<section id="importSheet" class="sheet" hidden>
-  <header><h3>取り込み</h3><button class="icon" data-close>×</button></header>
+<!-- 取り込み（その場で開く画面） -->
+<section id="importPanel" class="panel" hidden>
+  <header class="bar">
+    <button class="icon-btn" aria-label="閉じる" data-close data-icon="chevron-left"></button>
+    <h2>取り込み</h2>
+  </header>
   <p class="hint">種類（ビート・原曲・声のみ）と、どの曲に入れるかを確認してください。</p>
   <div id="importBody"></div>
-  <footer><button id="importGo" class="primary wide">保存</button></footer>
+  <footer class="panel-foot"><button id="importGo" class="primary wide">保存</button></footer>
 </section>
 
-<section id="editSheet" class="sheet" hidden>
-  <header><h3>調整</h3><button class="icon" data-close>×</button></header>
+<!-- 調整 -->
+<section id="editPanel" class="panel" hidden>
+  <header class="bar">
+    <button class="icon-btn" aria-label="閉じる" data-close data-icon="chevron-left"></button>
+    <h2>調整</h2>
+  </header>
   <div id="editBody"></div>
+</section>
+
+<!-- 使っているもの -->
+<section id="aboutPanel" class="panel" hidden>
+  <header class="bar">
+    <button class="icon-btn" aria-label="閉じる" data-close data-icon="chevron-left"></button>
+    <h2>使っているもの</h2>
+  </header>
+  <div class="about">
+    <h3>アイコン</h3>
+    <p><a href="https://lucide.dev/" target="_blank" rel="noopener">Lucide</a> v0.460.0（ISC License）</p>
+    <p class="license">Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.<br><br>Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.<br><br>THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.</p>
+    <h3>曲</h3>
+    <p>読み込んだ曲は、このスマホの中だけに保存されます。どこにも送られません。</p>
+  </div>
 </section>
 
 <div id="toast"></div>

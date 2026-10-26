@@ -1,7 +1,7 @@
 // アプリ本体をスマホに保存して、電波が無くても開けるようにする。
 // 中身を変えたら VERSION を上げる。
-const VERSION = 'rapdeck-v2';
-const FILES = ['./', 'index.html', 'style.css', 'app.js', 'analysis.js', 'deck-worklet.js',
+const VERSION = 'rapdeck-v3';
+const FILES = ['./', 'index.html', 'style.css', 'app.js', 'analysis.js', 'icons.js', 'deck-worklet.js',
   'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

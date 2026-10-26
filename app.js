@@ -1,4 +1,5 @@
 import { analyzeSong, VOICE_STEP, ANALYSIS_V } from './analysis.js';
+import { icon } from './icons.js';
 
 // ================= 保存（スマホの中だけ・IndexedDB） =================
 const DB_NAME = 'rapdeck';
@@ -36,10 +37,10 @@ const store = {
 
 // ================= 種類の見分け =================
 const TYPES = {
-  beat: { label: 'ビート', icon: '🥁' },
-  orig: { label: '原曲', icon: '🎤' },
-  vocal: { label: '声のみ', icon: '🗣' },
-  part: { label: 'パーツ', icon: '🎛' },
+  beat: { label: 'ビート', icon: 'drum' },
+  orig: { label: '原曲', icon: 'music' },
+  vocal: { label: '声のみ', icon: 'mic-vocal' },
+  part: { label: 'パーツ', icon: 'sliders-horizontal' },
 };
 const TYPE_ORDER = ['beat', 'orig', 'vocal', 'part'];
 
@@ -74,18 +75,24 @@ function guessTitle(name) {
 }
 
 // ================= 状態 =================
+const ls = {
+  get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
 const S = {
   songs: [],
   cur: null,          // 開いている曲
+  mode: ls.get('mode', 'dj'),   // 'dj'（スクラッチ） / 'listen'（画面を消しても流れる）
+  auto: ls.get('auto', '1') !== '0', // 聴くモードで次の曲へ進む
+  queue: [],          // 続けて流す順番（曲のid）
   playing: false,
-  loaded: false,
-  sr: 44100,
-  length: 0,          // サンプル数
-  pos: 0, rate: 0, posAt: 0,
-  loopBars: 0,
+  // DJ（AudioWorklet）
+  deckSong: null, sr: 44100, length: 0, pos: 0, rate: 0, posAt: 0,
+  loopBars: 0, loop: null,
   analyzing: new Set(),
-  countIn: localStorage.getItem('countIn') !== '0',
+  countIn: ls.get('countIn', '1') !== '0',
 };
+const isListen = () => S.mode === 'listen';
 
 const $ = (s, el = document) => el.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => {
@@ -113,6 +120,7 @@ function toast(msg) {
   clearTimeout(toast.t);
   toast.t = setTimeout(() => t.classList.remove('show'), 2200);
 }
+const typeChip = (t, cls = 'chip') => h('span', { class: `${cls} t-${t}` }, icon(TYPES[t].icon), TYPES[t].label);
 
 // 曲ごとの値（手で直した値があればそれを優先）
 const bpmOf = (s) => s.bpmManual || s.analysis?.bpm || null;
@@ -127,7 +135,7 @@ function anchorOf(s) {
   return b0 + Math.round((e - b0) / T) * T;
 }
 
-// ================= 音（AudioWorklet） =================
+// ================= DJモードの音（AudioWorklet） =================
 let ctx, node, silentEl, audioReady;
 // タップした瞬間に呼ぶ（iPhoneはタップの中でしか音を出し始められない）
 function ensureAudio() {
@@ -151,41 +159,40 @@ function ensureAudio() {
     node.port.onmessage = (e) => {
       const m = e.data;
       if (m.type === 'pos') { S.pos = m.pos; S.rate = m.rate; S.posAt = performance.now(); }
-      else if (m.type === 'ended') { S.playing = false; renderTransport(); }
+      else if (m.type === 'ended' && !isListen()) { S.playing = false; renderTransport(); }
     };
   });
   return audioReady;
 }
+// DJモードを使わない間は止めて、電池とメモリを節約する
+function sleepDeck() {
+  send({ type: 'load', layers: [], length: 0 });
+  S.deckSong = null;
+  silentEl?.pause();
+  ctx?.suspend();
+}
+let silentUrl;
 function silentWav() {
+  if (silentUrl) return silentUrl;
   const n = 4410, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
   const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
   w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt ');
   v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
   v.setUint32(24, 44100, true); v.setUint32(28, 88200, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
   w(36, 'data'); v.setUint32(40, n * 2, true);
-  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  return (silentUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })));
 }
 const send = (m, transfer) => node && node.port.postMessage(m, transfer || []);
 
-// 今の再生位置（秒）。エンジンからの報告の間を補う
-function nowSec() {
-  if (!S.loaded) return 0;
-  const dt = (performance.now() - S.posAt) / 1000;
-  const p = S.pos + S.rate * S.sr * Math.min(dt, 0.1);
-  return Math.max(0, Math.min(S.length, p)) / S.sr;
-}
-
 async function loadIntoDeck(song) {
-  S.loaded = false;
-  S.playing = false;
+  S.deckSong = null;
   send({ type: 'pause' });
   const decoded = [];
   for (const l of song.layers) {
     const blob = await store.blob(l.id);
     if (!blob) continue;
     try {
-      const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-      decoded.push({ l, buf });
+      decoded.push({ l, buf: await ctx.decodeAudioData(await blob.arrayBuffer()) });
     } catch (e) {
       console.warn(e);
       toast(`${l.name} が読めませんでした`);
@@ -207,27 +214,153 @@ async function loadIntoDeck(song) {
   send({ type: 'load', layers, length }, transfer);
   S.length = length;
   S.pos = 0; S.rate = 0; S.posAt = performance.now();
-  S.loaded = true;
+  S.deckSong = song;
   return true;
 }
 
+// ================= 聴くモードの音（<audio>：画面を消しても流れる） =================
+const audioEl = new Audio();
+audioEl.preload = 'auto';
+audioEl.setAttribute('playsinline', '');
+let listenKey = '', listenUrl = '', listenUnlocked = false;
+
+// タップの中で一度鳴らしておくと、あとから曲を入れ替えても再生できる
+function unlockListen() {
+  if (listenUnlocked) return;
+  listenUnlocked = true;
+  if (!audioEl.src) {
+    audioEl.src = silentWav();
+    audioEl.play().then(() => audioEl.pause()).catch(() => {});
+  }
+}
+
+const onIds = (song) => {
+  const ids = song.layers.filter((l) => song.on?.[l.id]).map((l) => l.id);
+  return ids.length ? ids : song.layers.slice(0, 1).map((l) => l.id);
+};
+
+// 鳴らすファイルが1つならそのまま、2つ以上（ビート＋声など）なら1本に重ねてから流す
+async function loadListen(song) {
+  const ids = onIds(song);
+  const key = song.id + ':' + ids.join(',');
+  if (key === listenKey) return true;
+  let blob;
+  if (ids.length === 1) {
+    blob = await store.blob(ids[0]);
+  } else {
+    $('#status').textContent = '重ねています…';
+    try {
+      const bufs = [];
+      for (const id of ids) {
+        const b = await store.blob(id);
+        if (b) bufs.push(await new OfflineAudioContext(2, 1, 44100).decodeAudioData(await b.arrayBuffer()));
+      }
+      const len = Math.max(...bufs.map((b) => b.length));
+      const oc = new OfflineAudioContext(2, len, 44100);
+      for (const b of bufs) {
+        const src = oc.createBufferSource();
+        src.buffer = b;
+        src.connect(oc.destination);
+        src.start(0);
+      }
+      blob = wavBlob(await oc.startRendering());
+    } catch (e) {
+      console.warn(e);
+      blob = await store.blob(ids[0]);
+    }
+    if ($('#status').textContent === '重ねています…') $('#status').textContent = '';
+  }
+  if (S.cur !== song || !blob) return false;
+  if (listenUrl) URL.revokeObjectURL(listenUrl);
+  listenUrl = URL.createObjectURL(blob);
+  listenKey = key;
+  audioEl.src = listenUrl;
+  await new Promise((r) => {
+    audioEl.addEventListener('loadedmetadata', r, { once: true });
+    audioEl.addEventListener('error', r, { once: true });
+  });
+  return true;
+}
+
+function wavBlob(buf) {
+  const ch = buf.numberOfChannels, n = buf.length, sr = buf.sampleRate;
+  const out = new DataView(new ArrayBuffer(44 + n * ch * 2));
+  const w = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); out.setUint32(4, 36 + n * ch * 2, true); w(8, 'WAVEfmt ');
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, ch, true);
+  out.setUint32(24, sr, true); out.setUint32(28, sr * ch * 2, true); out.setUint16(32, ch * 2, true); out.setUint16(34, 16, true);
+  w(36, 'data'); out.setUint32(40, n * ch * 2, true);
+  const data = [...Array(ch)].map((_, c) => buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, data[c][i]));
+      out.setInt16(o, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      o += 2;
+    }
+  }
+  return new Blob([out], { type: 'audio/wav' });
+}
+
+audioEl.addEventListener('play', () => { if (isListen()) { S.playing = true; renderTransport(); } });
+audioEl.addEventListener('pause', () => { if (isListen()) { S.playing = false; renderTransport(); } });
+audioEl.addEventListener('timeupdate', () => {
+  if (!isListen()) return;
+  if (S.loop && audioEl.currentTime >= S.loop.end) audioEl.currentTime = S.loop.start;
+  positionState();
+});
+audioEl.addEventListener('ended', () => {
+  if (!isListen()) return;
+  S.playing = false;
+  renderTransport();
+  if (S.auto) nextSong();
+});
+
+// ================= 再生の操作（どちらのモードでも同じ） =================
+function nowSec() {
+  if (!S.cur) return 0;
+  if (isListen()) return audioEl.currentTime || 0;
+  if (!S.deckSong) return 0;
+  const dt = (performance.now() - S.posAt) / 1000;
+  const p = S.pos + S.rate * S.sr * Math.min(dt, 0.1);
+  return Math.max(0, Math.min(S.length, p)) / S.sr;
+}
+function durSec() {
+  if (isListen()) return isFinite(audioEl.duration) ? audioEl.duration : S.cur?.analysis?.duration || 0;
+  return S.deckSong ? S.length / S.sr : S.cur?.analysis?.duration || 0;
+}
+const moving = () => (isListen() ? S.playing : S.rate > 0.5);
+
 function play() {
-  if (!S.loaded) return;
+  if (isListen()) {
+    if (!listenKey) return;
+    if (audioEl.ended) audioEl.currentTime = 0;
+    audioEl.play().catch(() => toast('もう一度 再生を押してください'));
+    return;
+  }
+  if (!S.deckSong) return;
   ensureAudio();
-  if (nowSec() >= S.length / S.sr - 0.05) seek(0);
+  if (nowSec() >= durSec() - 0.05) seek(0);
   send({ type: 'play', instant: true });
   S.playing = true;
   renderTransport();
 }
-function pauseDeck() {
-  send({ type: 'pause' });
-  S.playing = false;
-  renderTransport();
+function pause() {
+  if (isListen()) audioEl.pause();
+  else {
+    send({ type: 'pause' });
+    S.playing = false;
+    renderTransport();
+  }
 }
 function seek(sec) {
-  const p = Math.max(0, Math.min(S.length - 1, sec * S.sr));
-  send({ type: 'seek', pos: p });
-  S.pos = p; S.posAt = performance.now();
+  sec = Math.max(0, Math.min(durSec() - 0.01, sec));
+  if (isListen()) audioEl.currentTime = sec;
+  else {
+    const p = sec * S.sr;
+    send({ type: 'seek', pos: p });
+    S.pos = p; S.posAt = performance.now();
+  }
   if (S.loopBars) setLoop(S.loopBars);
 }
 function setLoop(bars) {
@@ -241,32 +374,39 @@ function setLoop(bars) {
 }
 
 // ================= 画面：ライブラリ =================
+function sortedSongs() {
+  return [...S.songs].sort((a, b) => (b.lastPlayed || b.created) - (a.lastPlayed || a.created));
+}
 function renderLibrary() {
   const list = $('#songs');
   const q = $('#search').value.trim().toLowerCase();
   list.replaceChildren();
-  const songs = S.songs
-    .filter((s) => !q || s.title.toLowerCase().includes(q))
-    .sort((a, b) => (b.lastPlayed || b.created) - (a.lastPlayed || a.created));
+  const songs = sortedSongs().filter((s) => !q || s.title.toLowerCase().includes(q));
   $('#searchWrap').hidden = S.songs.length < 6;
   $('#empty').hidden = S.songs.length > 0;
+  $('#playAll').hidden = S.songs.length < 2;
   for (const s of songs) {
     const types = TYPE_ORDER.filter((t) => s.layers.some((l) => l.type === t));
     const e = entryOf(s), bpm = bpmOf(s);
     const busy = S.analyzing.has(s.id);
     list.append(
-      h('button', { class: 'card', onclick: () => openSong(s) },
+      h('button', { class: `card ${S.cur === s ? 'now' : ''}`, onclick: () => openSong(s) },
         h('div', { class: 'card-top' },
           h('span', { class: 'title' }, s.title),
           h('span', { class: 'dur' }, fmt(s.analysis?.duration))),
-        h('div', { class: 'chips' },
-          types.map((t) => h('span', { class: `chip t-${t}` }, `${TYPES[t].icon} ${TYPES[t].label}`))),
+        h('div', { class: 'chips' }, types.map((t) => typeChip(t))),
         h('div', { class: 'meta' },
           busy ? h('span', { class: 'busy' }, '解析中…')
-            : [e != null ? h('span', {}, `入り ${fmt1(e)}`) : h('span', { class: 'dim' }, '入り 不明'),
+            : [e != null ? h('span', { class: 'entry' }, `入り ${fmt1(e)}`) : h('span', { class: 'dim' }, '入り 不明'),
               bpm ? h('span', {}, `${bpm.toFixed(0)} BPM`) : null])),
     );
   }
+}
+
+// ホーム画面から開いていない時だけ、追加の案内を出す
+function renderInstallHint() {
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  $('#install').hidden = standalone || ls.get('installHint') === '0';
 }
 
 // ================= 取り込み =================
@@ -296,7 +436,12 @@ function startImport(files, intoSong = null) {
     if (drop === q) seen.set(k, p);
   }
   renderImport(intoSong);
-  openSheet('#importSheet');
+  openPanel('#importPanel');
+}
+
+function typeSelect(value, onchange) {
+  return h('select', { onchange: (e) => onchange(e.target.value) },
+    TYPE_ORDER.map((t) => h('option', { value: t, selected: value === t }, TYPES[t].label)));
 }
 
 function renderImport(intoSong) {
@@ -310,12 +455,10 @@ function renderImport(intoSong) {
   const titles = [...groups.keys()];
   for (const [title, items] of groups) {
     const g = h('div', { class: 'igroup' });
-    const input = h('input', { class: 'ititle', value: title, disabled: !!intoSong,
+    const input = h('input', { class: 'ititle', value: title, disabled: !!intoSong, enterkeyhint: 'done', autocapitalize: 'off', autocorrect: 'off',
       onchange: (e) => { const v = e.target.value.trim() || title; items.forEach((p) => (p.title = v)); renderImport(intoSong); } });
     g.append(h('label', { class: 'small' }, intoSong ? '追加先' : '曲名'), input);
     for (const p of items) {
-      const typeSel = h('select', { onchange: (e) => (p.type = e.target.value) },
-        TYPE_ORDER.map((t) => h('option', { value: t, selected: p.type === t }, `${TYPES[t].icon} ${TYPES[t].label}`)));
       const moveSel = intoSong ? null : h('select', { class: 'move', onchange: (e) => {
         const v = e.target.value;
         if (v === '__new') p.title = prompt('新しい曲名', guessTitle(p.file.name)) || p.title;
@@ -327,7 +470,7 @@ function renderImport(intoSong) {
       g.append(h('div', { class: `ifile ${p.use ? '' : 'off'}` },
         h('label', { class: 'use' }, h('input', { type: 'checkbox', checked: p.use, onchange: (e) => { p.use = e.target.checked; renderImport(intoSong); } })),
         h('div', { class: 'iname' }, h('div', { class: 'fname' }, p.file.name),
-          h('div', { class: 'irow' }, typeSel, moveSel))));
+          h('div', { class: 'irow' }, typeSelect(p.type, (v) => (p.type = v)), moveSel))));
     }
     body.append(g);
   }
@@ -338,7 +481,7 @@ function renderImport(intoSong) {
 }
 
 async function saveImport(intoSong) {
-  closeSheet();
+  closePanel();
   const use = pending.filter((p) => p.use);
   pending = [];
   const touched = new Map();
@@ -365,19 +508,16 @@ async function saveImport(intoSong) {
   }
   navigator.storage?.persist?.();
   renderLibrary();
-  if (intoSong && S.cur === intoSong) {
-    renderLayers();
-    await loadIntoDeck(intoSong);
-  }
+  if (intoSong && S.cur === intoSong) await reloadCurrent();
   for (const song of touched.values()) await analyze(song);
 }
 
 function defaultOn(song) {
   if (song.layers.some((l) => song.on?.[l.id])) return;
   song.on = {};
-  const first = (t) => song.layers.filter((l) => l.type === t);
-  const pick = first('beat').slice(0, 1).length ? first('beat').slice(0, 1)
-    : first('part').length ? first('part') : first('orig').slice(0, 1).length ? first('orig').slice(0, 1) : song.layers.slice(0, 1);
+  const of = (t) => song.layers.filter((l) => l.type === t);
+  const pick = of('beat').length ? of('beat').slice(0, 1)
+    : of('part').length ? of('part') : of('orig').length ? of('orig').slice(0, 1) : song.layers.slice(0, 1);
   pick.forEach((l) => (song.on[l.id] = true));
 }
 
@@ -400,30 +540,96 @@ async function analyze(song) {
 }
 
 // ================= 画面：プレイヤー =================
-async function openSong(song) {
-  ensureAudio(); // タップの直後に音の準備を始める（iPhoneの決まり）
+// opts.push=false は「次の曲へ」のように画面の履歴を増やさない時
+async function openSong(song, opts = {}) {
+  if (opts.mode) setModeFlag(opts.mode);
+  // タップの直後に音の準備を始める（iPhoneの決まり）
+  unlockListen();
+  if (!isListen()) ensureAudio();
+  if (!opts.queue) S.queue = sortedSongs().map((s) => s.id);
+  else S.queue = opts.queue;
+  const wasOpen = !!S.cur;
+  pause();
   S.cur = song;
   S.loopBars = 0; S.loop = null;
   song.lastPlayed = Date.now();
   store.putSong(song);
   show('player');
-  history.pushState({ p: 'player' }, '');
+  if (!wasOpen && opts.push !== false) history.pushState({ p: 'player' }, '');
   $('#pTitle').textContent = song.title;
   $('#discLabel').textContent = song.title;
+  $('#coverTitle').textContent = song.title;
   renderLayers();
   buildWave();
   renderPlayerInfo();
   renderTransport();
-  $('#status').textContent = '読み込み中…';
-  await ensureAudio();
-  const ok = await loadIntoDeck(song);
+  const ok = await loadCurrent(song);
   if (S.cur !== song) return;
-  $('#status').textContent = ok ? '' : '再生できるファイルがありません';
-  if (ok) { play(); mediaSession(song); }
+  if (ok) play();
+  mediaSession(song);
+}
+
+// 今のモードで、今の曲を鳴らせる状態にする
+async function loadCurrent(song) {
+  $('#status').textContent = '読み込み中…';
+  let ok;
+  if (isListen()) {
+    ok = await loadListen(song);
+  } else {
+    await ensureAudio();
+    ok = S.deckSong === song || (await loadIntoDeck(song));
+  }
+  if (S.cur === song) $('#status').textContent = ok ? '' : '再生できるファイルがありません';
+  return ok;
+}
+
+async function reloadCurrent() {
+  const s = S.cur, t = nowSec(), was = S.playing;
+  pause();
+  renderLayers();
+  S.deckSong = null; listenKey = '';
+  if (await loadCurrent(s)) { seek(t); if (was) play(); }
+}
+
+function setModeFlag(mode) {
+  S.mode = mode;
+  ls.set('mode', mode);
+  document.body.dataset.mode = mode;
+  document.querySelectorAll('#modeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+}
+
+// DJ ⇄ 聴く。再生位置はそのまま引き継ぐ
+async function switchMode(mode) {
+  if (mode === S.mode || !S.cur) return;
+  if (mode === 'listen') unlockListen(); else ensureAudio();
+  const song = S.cur, t = nowSec(), was = S.playing;
+  pause();
+  setModeFlag(mode);
+  if (mode === 'listen') sleepDeck();
+  else { audioEl.removeAttribute('src'); audioEl.load(); listenKey = ''; }
+  renderTransport();
+  if (await loadCurrent(song)) {
+    seek(t);
+    if (S.loopBars) setLoop(S.loopBars);
+    if (was) play();
+  }
+  if (mode === 'listen') toast('画面を消しても流れ続けます');
+}
+
+function nextSong(dir = 1) {
+  const q = S.queue.filter((id) => S.songs.some((s) => s.id === id));
+  if (!q.length || !S.cur) return;
+  const i = q.indexOf(S.cur.id);
+  const next = S.songs.find((s) => s.id === q[(i + dir + q.length) % q.length]);
+  if (next) openSong(next, { queue: q, push: false });
 }
 
 function closePlayer() {
-  pauseDeck();
+  pause();
+  sleepDeck();
+  audioEl.removeAttribute('src');
+  audioEl.load();
+  listenKey = '';
   S.cur = null;
   show('library');
   renderLibrary();
@@ -437,21 +643,28 @@ function renderLayers() {
     const same = s.layers.filter((x) => x.type === l.type);
     const label = same.length > 1 ? `${TYPES[l.type].label}${same.indexOf(l) + 1}` : TYPES[l.type].label;
     box.append(h('button', { class: `layer t-${l.type} ${on ? 'on' : ''}`, onclick: () => toggleLayer(l) },
-      `${TYPES[l.type].icon} ${label}`));
+      icon(TYPES[l.type].icon), label));
   }
 }
 
-function toggleLayer(l) {
+async function toggleLayer(l) {
   const s = S.cur;
   s.on ||= {};
   // 原曲を入れたらビート・声を外す（逆も）。同時に鳴らすと音が二重になるため
   const turningOn = !s.on[l.id];
+  if (!turningOn && s.layers.filter((x) => s.on[x.id]).length === 1) return; // 全部消すと何も鳴らない
   if (turningOn && l.type === 'orig') s.layers.forEach((x) => { if (x.id !== l.id) s.on[x.id] = false; });
   if (turningOn && l.type !== 'orig') s.layers.forEach((x) => { if (x.type === 'orig') s.on[x.id] = false; });
   s.on[l.id] = turningOn;
-  for (const x of s.layers) send({ type: 'gain', id: x.id, value: s.on[x.id] ? 1 : 0 });
   store.putSong(s);
   renderLayers();
+  buildWave();
+  if (isListen()) {
+    const t = nowSec(), was = S.playing;
+    if (await loadListen(s)) { seek(t); if (was) play(); }
+  } else {
+    for (const x of s.layers) send({ type: 'gain', id: x.id, value: s.on[x.id] ? 1 : 0 });
+  }
 }
 
 function renderPlayerInfo() {
@@ -461,14 +674,20 @@ function renderPlayerInfo() {
   $('#bpm').textContent = bpm ? `${bpm.toFixed(1)} BPM` : 'BPM --';
   const e = entryOf(s);
   $('#entryInfo').textContent = S.analyzing.has(s.id) ? '解析中…' : e != null ? `入り ${fmt1(e)}` : '入り 不明';
+  const q = S.queue, i = q.indexOf(s.id);
+  const next = S.songs.find((x) => x.id === q[(i + 1) % q.length]);
+  $('#nextTitle').textContent = next && next !== s ? next.title : '—';
+  $('#autoNext').checked = S.auto;
 }
 
 function renderTransport() {
-  $('#play').textContent = S.playing ? '❚❚' : '▶';
-  $('#play').classList.toggle('on', S.playing);
+  const p = $('#play');
+  p.replaceChildren(icon(S.playing ? 'pause' : 'play', 'big'));
+  p.setAttribute('aria-label', S.playing ? '一時停止' : '再生');
   const lb = $('#loop');
-  lb.textContent = S.loopBars ? `🔁 ${S.loopBars}小節` : '🔁';
+  lb.replaceChildren(icon('repeat'), h('small', {}, S.loopBars ? `${S.loopBars}小節` : 'ループ'));
   lb.classList.toggle('on', !!S.loopBars);
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = S.playing ? 'playing' : 'paused';
 }
 
 // ---------- 波形 ----------
@@ -477,7 +696,7 @@ function buildWave() {
   const s = S.cur, c = $('#wave');
   const dpr = window.devicePixelRatio || 1;
   const w = c.clientWidth, hgt = c.clientHeight;
-  if (!w) return;
+  if (!w || !s) return;
   c.width = w * dpr; c.height = hgt * dpr;
   const off = document.createElement('canvas');
   off.width = c.width; off.height = c.height;
@@ -562,9 +781,8 @@ function drawWave(t) {
 }
 
 function waveSeek(e) {
-  const c = $('#wave');
-  const r = c.getBoundingClientRect();
-  const dur = S.length / S.sr;
+  const r = $('#wave').getBoundingClientRect();
+  const dur = durSec();
   if (!dur) return;
   seek(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur);
 }
@@ -572,8 +790,8 @@ function waveSeek(e) {
 // ---------- 小節カウンター と カウントイン ----------
 function renderCounter(t) {
   const s = S.cur, T = beatLen(s);
-  const out = $('#counter'), big = $('#count');
-  if (!T) { out.textContent = ''; big.textContent = ''; return; }
+  const out = $('#counter');
+  if (!T) { out.textContent = ''; setCount(''); return; }
   const an = anchorOf(s);
   const beats = (t - an) / T;
   if (beats < 0) {
@@ -584,18 +802,24 @@ function renderCounter(t) {
     out.textContent = `${Math.floor(b / 4) + 1}小節 ${(b % 4) + 1}拍`;
   }
   let txt = '';
-  if (S.countIn && entryOf(s) != null && S.rate > 0.5) {
+  if (S.countIn && entryOf(s) != null && moving()) {
     if (beats >= -4 && beats < 0) txt = String(Math.ceil(-beats - 1e-6));
     else if (beats >= 0 && beats < 1) txt = 'IN';
   }
-  if (big.textContent !== txt) {
+  setCount(txt);
+  // 拍ごとに光る
+  const phase = ((t - an) / T) % 1;
+  $('#beatDot').style.opacity = moving() && (phase + 1) % 1 < 0.15 ? 1 : 0.15;
+}
+
+// レコードの上（DJ）とジャケットの上（聴く）の両方に出す
+function setCount(txt) {
+  document.querySelectorAll('.count').forEach((big) => {
+    if (big.textContent === txt) return;
     big.textContent = txt;
     big.classList.remove('pop');
     if (txt) { void big.offsetWidth; big.classList.add('pop'); }
-  }
-  // 拍ごとに光る
-  const phase = ((t - an) / T) % 1;
-  $('#beatDot').style.opacity = S.rate > 0.5 && (phase + 1) % 1 < 0.15 ? 1 : 0.15;
+  });
 }
 
 // ---------- レコード（スクラッチ） ----------
@@ -606,7 +830,7 @@ function setupDisc() {
   const el = $('#disc');
   const angleOf = (e) => Math.atan2(e.clientY - disc.cy, e.clientX - disc.cx);
   el.addEventListener('pointerdown', (e) => {
-    if (!S.loaded) return;
+    if (!S.deckSong) return;
     e.preventDefault();
     el.setPointerCapture(e.pointerId);
     const r = el.getBoundingClientRect();
@@ -657,18 +881,22 @@ function discFrame(now) {
 
 // ---------- 毎フレーム ----------
 function frame(now) {
-  if (S.cur) {
-    discFrame(now);
+  if (S.cur && !document.hidden) {
     const t = nowSec();
+    if (!isListen()) {
+      discFrame(now);
+      $('#disc').style.transform = `rotate(${(t * RPS * 360) % 360}deg)`;
+    } else if (S.loop && t >= S.loop.end) {
+      audioEl.currentTime = S.loop.start;
+    }
     drawWave(t);
-    $('#disc').style.transform = `rotate(${(t * RPS * 360) % 360}deg)`;
-    $('#time').textContent = `${fmt(t)} / ${fmt(S.length / S.sr)}`;
+    $('#time').textContent = `${fmt(t)} / ${fmt(durSec())}`;
     renderCounter(t);
   }
   requestAnimationFrame(frame);
 }
 
-// ================= 調整シート =================
+// ================= 調整の画面 =================
 let taps = [];
 function renderEdit() {
   const s = S.cur, body = $('#editBody');
@@ -698,25 +926,27 @@ function renderEdit() {
       h('p', { class: 'hint' }, '小節の数え方がズレる時は、曲に合わせてTAPを4回以上押してください。')),
     h('section', {},
       h('h3', {}, '曲名'),
-      h('input', { class: 'ititle', value: s.title, onchange: (ev) => { s.title = ev.target.value.trim() || s.title; $('#pTitle').textContent = s.title; $('#discLabel').textContent = s.title; save(); } })),
+      h('input', { class: 'ititle', value: s.title, enterkeyhint: 'done', autocapitalize: 'off', autocorrect: 'off',
+        onchange: (ev) => { s.title = ev.target.value.trim() || s.title; $('#pTitle').textContent = s.title; $('#discLabel').textContent = s.title; $('#coverTitle').textContent = s.title; save(); mediaSession(s); } })),
     h('section', {},
       h('h3', {}, 'ファイル'),
       s.layers.map((l) => h('div', { class: 'ifile' },
+        h('div', { class: 'ftype' }, icon(TYPES[l.type].icon)),
         h('div', { class: 'iname' }, h('div', { class: 'fname' }, l.name),
           h('div', { class: 'irow' },
-            h('select', { onchange: async (ev) => { l.type = ev.target.value; await store.putSong(s); renderLayers(); analyze(s); } },
-              TYPE_ORDER.map((t) => h('option', { value: t, selected: l.type === t }, `${TYPES[t].icon} ${TYPES[t].label}`))),
-            h('button', { class: 'danger small', onclick: () => removeLayer(s, l) }, '外す'))))),
-      h('button', { class: 'btn', disabled: S.analyzing.has(s.id), onclick: () => { closeSheet(); analyze(s); } }, '↻ 解析し直す'),
-      h('label', { class: 'btn' }, '＋ ファイルを追加',
-        h('input', { type: 'file', multiple: true, accept: 'audio/*,video/mp4,.m4a,.wav,.mp3', hidden: true,
-          onchange: (ev) => { closeSheet(); startImport(ev.target.files, s); } }))),
+            typeSelect(l.type, async (v) => { l.type = v; await store.putSong(s); renderLayers(); renderEdit(); analyze(s); }),
+            h('button', { class: 'danger small', onclick: () => removeLayer(s, l) }, icon('trash-2'), '外す'))))),
+      h('div', { class: 'row' },
+        h('label', { class: 'btn' }, icon('file-plus'), 'ファイルを追加',
+          h('input', { type: 'file', multiple: true, accept: 'audio/*,video/mp4,.m4a,.wav,.mp3', hidden: true,
+            onchange: (ev) => startImport(ev.target.files, s) })),
+        h('button', { disabled: S.analyzing.has(s.id), onclick: () => { closePanel(); analyze(s); } }, icon('rotate-ccw'), '解析し直す'))),
     h('section', {},
       h('label', { class: 'switch' },
-        h('input', { type: 'checkbox', checked: S.countIn, onchange: (ev) => { S.countIn = ev.target.checked; localStorage.setItem('countIn', S.countIn ? '1' : '0'); } }),
+        h('input', { type: 'checkbox', checked: S.countIn, onchange: (ev) => { S.countIn = ev.target.checked; ls.set('countIn', S.countIn ? '1' : '0'); } }),
         '入りの前に 4・3・2・1 を表示')),
     h('section', {},
-      h('button', { class: 'danger', onclick: () => deleteSong(s) }, 'この曲を削除')),
+      h('button', { class: 'danger', onclick: () => deleteSong(s) }, icon('trash-2'), 'この曲を削除')),
   );
 }
 
@@ -741,9 +971,8 @@ async function removeLayer(s, l) {
   if (!s.layers.length) return deleteSong(s, true);
   defaultOn(s);
   await store.putSong(s);
-  closeSheet();
-  renderLayers();
-  await loadIntoDeck(s);
+  renderEdit();
+  await reloadCurrent();
   analyze(s);
 }
 
@@ -752,43 +981,86 @@ async function deleteSong(s, skipConfirm) {
   for (const l of s.layers) await store.delBlob(l.id);
   await store.delSong(s.id);
   S.songs = S.songs.filter((x) => x !== s);
-  closeSheet();
+  hidePanels();
   closePlayer();
+  history.go(-2);
 }
 
 // ================= 共通 =================
 function show(name) {
   document.body.dataset.screen = name;
 }
-function openSheet(sel) {
-  $('#scrim').hidden = false;
-  document.querySelectorAll('.sheet').forEach((x) => (x.hidden = true));
+// 続きの画面は、下から出さずにその場で開く（素材帳の決まり）
+function openPanel(sel) {
+  const already = document.querySelector('.panel:not([hidden])');
+  hidePanels();
   $(sel).hidden = false;
+  $(sel).scrollTop = 0;
+  if (!already) history.pushState({ panel: sel }, '');
 }
-function closeSheet() {
-  $('#scrim').hidden = true;
-  document.querySelectorAll('.sheet').forEach((x) => (x.hidden = true));
+function hidePanels() {
+  document.querySelectorAll('.panel').forEach((x) => (x.hidden = true));
+}
+function closePanel() {
+  if (history.state?.panel) history.back();
+  else hidePanels();
 }
 
 function mediaSession(song) {
   if (!('mediaSession' in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: 'ラップデッキ' });
-  navigator.mediaSession.setActionHandler('play', play);
-  navigator.mediaSession.setActionHandler('pause', pauseDeck);
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: song.title,
+    artist: 'ラップデッキ',
+    artwork: [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }],
+  });
+  const set = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch {} };
+  set('play', play);
+  set('pause', pause);
+  set('seekbackward', () => seek(nowSec() - 10));
+  set('seekforward', () => seek(nowSec() + 10));
+  set('seekto', (d) => seek(d.seekTime));
+  set('previoustrack', () => (nowSec() > 3 ? seek(0) : nextSong(-1)));
+  set('nexttrack', () => nextSong(1));
+}
+function positionState() {
+  try {
+    const d = durSec();
+    if (d && navigator.mediaSession?.setPositionState) navigator.mediaSession.setPositionState({ duration: d, position: Math.min(d, nowSec()), playbackRate: 1 });
+  } catch {}
+}
+
+function staticIcons() {
+  document.querySelectorAll('[data-icon]').forEach((el) => el.prepend(icon(el.dataset.icon, el.dataset.iconClass || '')));
 }
 
 async function init() {
+  staticIcons();
+  setModeFlag(S.mode);
+  renderTransport();
   S.songs = await store.songs();
   renderLibrary();
+  renderInstallHint();
   // 解析のやり方が新しくなっていたら、保存済みの曲も順番に解析し直す
   (async () => {
     for (const s of S.songs) if (s.analysis?.v !== ANALYSIS_V) await analyze(s);
   })();
+
   $('#pick').addEventListener('change', (e) => { startImport(e.target.files); e.target.value = ''; });
   $('#search').addEventListener('input', renderLibrary);
+  $('#playAll').addEventListener('click', () => {
+    const q = sortedSongs().map((s) => s.id);
+    S.auto = true; ls.set('auto', '1');
+    openSong(S.songs.find((s) => s.id === q[0]), { mode: 'listen', queue: q });
+  });
+  $('#installClose').addEventListener('click', () => { ls.set('installHint', '0'); renderInstallHint(); });
+  $('#aboutBtn').addEventListener('click', () => openPanel('#aboutPanel'));
   $('#back').addEventListener('click', () => history.back());
-  window.addEventListener('popstate', () => { closeSheet(); if (S.cur) closePlayer(); });
-  $('#play').addEventListener('click', () => (S.playing ? pauseDeck() : play()));
+  window.addEventListener('popstate', () => {
+    if (document.querySelector('.panel:not([hidden])')) return hidePanels();
+    if (S.cur) closePlayer();
+  });
+  document.querySelectorAll('#modeSeg button').forEach((b) => b.addEventListener('click', () => switchMode(b.dataset.mode)));
+  $('#play').addEventListener('click', () => (S.playing ? pause() : play()));
   $('#toEntry').addEventListener('click', () => {
     const s = S.cur, T = beatLen(s), e = entryOf(s);
     seek(e == null ? 0 : Math.max(0, anchorOf(s) - (T ? 8 * T : 4)));
@@ -799,17 +1071,23 @@ async function init() {
   $('#nextBar').addEventListener('click', () => barJump(1));
   $('#loop').addEventListener('click', () => {
     if (!beatLen(S.cur)) return toast('テンポが分からないためループできません');
-    const next = { 0: 4, 4: 8, 8: 16, 16: 0 }[S.loopBars];
-    setLoop(next);
+    setLoop({ 0: 4, 4: 8, 8: 16, 16: 0 }[S.loopBars]);
     renderTransport();
   });
-  $('#edit').addEventListener('click', () => { renderEdit(); openSheet('#editSheet'); });
-  $('#scrim').addEventListener('click', closeSheet);
-  document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeSheet));
+  $('#nextBtn').addEventListener('click', () => nextSong(1));
+  $('#autoNext').addEventListener('change', (e) => { S.auto = e.target.checked; ls.set('auto', S.auto ? '1' : '0'); });
+  $('#edit').addEventListener('click', () => { renderEdit(); openPanel('#editPanel'); });
+  document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closePanel));
   const wave = $('#wave');
   wave.addEventListener('pointerdown', (e) => { wave.setPointerCapture(e.pointerId); waveSeek(e); });
-  wave.addEventListener('pointermove', (e) => { if (e.buttons || e.pointerType === 'touch') if (wave.hasPointerCapture(e.pointerId)) waveSeek(e); });
+  wave.addEventListener('pointermove', (e) => { if (wave.hasPointerCapture(e.pointerId)) waveSeek(e); });
   window.addEventListener('resize', () => S.cur && buildWave());
+  // iPhone の Safari でピンチの拡大を止める
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
+  // キーボードで入力欄が隠れないように
+  document.addEventListener('focusin', (e) => {
+    if (e.target.matches('input, select')) setTimeout(() => e.target.scrollIntoView({ block: 'nearest' }), 300);
+  });
   setupDisc();
   requestAnimationFrame(frame);
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
