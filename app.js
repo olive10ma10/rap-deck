@@ -30,8 +30,16 @@ const store = {
   songs: () => tx('songs', 'readonly', (s) => s.getAll()),
   putSong: (song) => tx('songs', 'readwrite', (s) => s.put(song)),
   delSong: (id) => tx('songs', 'readwrite', (s) => s.delete(id)),
-  blob: (id) => tx('blobs', 'readonly', (s) => s.get(id)),
-  putBlob: (id, b) => tx('blobs', 'readwrite', (s) => s.put(b, id)),
+  // iPhone の Safari は選んだファイルを「場所の控え」のまま保存することがあり、閉じると読めなくなる。
+  // 中身をコピーした ArrayBuffer で保存する（前の版で保存した Blob もそのまま読める）
+  blob: async (id) => {
+    const v = await tx('blobs', 'readonly', (s) => s.get(id));
+    return v?.buf ? new Blob([v.buf], { type: v.type }) : v;
+  },
+  putBlob: async (id, file) => {
+    const v = { buf: await file.arrayBuffer(), type: file.type };
+    return tx('blobs', 'readwrite', (s) => s.put(v, id));
+  },
   delBlob: (id) => tx('blobs', 'readwrite', (s) => s.delete(id)),
 };
 
@@ -485,28 +493,30 @@ async function saveImport(intoSong) {
   const use = pending.filter((p) => p.use);
   pending = [];
   const touched = new Map();
+  navigator.storage?.persist?.();
+  // 1ファイルごとに曲まで保存する。途中でアプリを閉じても、そこまでは残る
   try {
-    for (const p of use) {
+    for (const [i, p] of use.entries()) {
+      toast(`保存中 ${i + 1}/${use.length}`);
+      const id = uid();
+      await store.putBlob(id, p.file);
       let song = intoSong || S.songs.find((s) => s.title === p.title) || touched.get(p.title);
       if (!song) {
         song = { id: uid(), title: p.title, created: Date.now(), layers: [], on: {} };
         S.songs.push(song);
       }
       touched.set(song.title, song);
-      const id = uid();
-      await store.putBlob(id, p.file);
       song.layers.push({ id, type: p.type, name: p.file.name, size: p.file.size });
       song.layers.sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type));
+      defaultOn(song);
+      await store.putSong(song);
+      renderLibrary();
     }
+    toast(`${use.length}個 保存しました`);
   } catch (e) {
     console.error(e);
     alert('保存できませんでした（スマホの空き容量が足りない可能性があります）');
   }
-  for (const song of touched.values()) {
-    defaultOn(song);
-    await store.putSong(song);
-  }
-  navigator.storage?.persist?.();
   renderLibrary();
   if (intoSong && S.cur === intoSong) await reloadCurrent();
   for (const song of touched.values()) await analyze(song);
