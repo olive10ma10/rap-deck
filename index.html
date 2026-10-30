@@ -80,7 +80,14 @@
     <span id="counter"></span>
     <span><span id="beatDot"></span><span id="bpm"></span></span>
   </div>
-  <div class="info sub"><span id="entryInfo"></span><span id="status"></span></div>
+  <!-- 入りをその場で直す（波形の「入り」の線は指で動かせる） -->
+  <div class="entry-bar">
+    <span id="entryInfo"></span>
+    <button id="entryBack" class="small"></button>
+    <button id="entryFwd" class="small"></button>
+    <button id="entryHere" class="small entry-here" data-icon="flag">ここを入りに</button>
+  </div>
+  <div class="info sub"><span id="status"></span></div>
 
   <div class="stage">
     <!-- DJ：レコードをこする -->

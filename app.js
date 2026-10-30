@@ -135,6 +135,14 @@ const bpmOf = (s) => s.bpmManual || s.analysis?.bpm || null;
 const beat0Of = (s) => (s.beat0Manual ?? s.analysis?.beat0) || 0;
 const entryOf = (s) => (s.entryManual ?? s.analysis?.entry) ?? null;
 const beatLen = (s) => (bpmOf(s) ? 60 / bpmOf(s) : null);
+// 入りを手で決める。null なら自動に戻す
+function setEntry(s, t) {
+  if (t == null) delete s.entryManual;
+  else s.entryManual = Math.max(0, Math.min(durSec() || t, t));
+  store.putSong(s);
+  if (s === S.cur) { buildWave(); renderPlayerInfo(); if (S.loopBars) setLoop(S.loopBars); }
+  renderLibrary();
+}
 // 「入り」を一番近い拍に合わせた位置。ここを1小節目1拍目として数える
 function anchorOf(s) {
   const T = beatLen(s), e = entryOf(s), b0 = beat0Of(s);
@@ -682,8 +690,13 @@ function renderPlayerInfo() {
   if (!s) return;
   const bpm = bpmOf(s);
   $('#bpm').textContent = bpm ? `${bpm.toFixed(1)} BPM` : 'BPM --';
-  const e = entryOf(s);
-  $('#entryInfo').textContent = S.analyzing.has(s.id) ? '解析中…' : e != null ? `入り ${fmt1(e)}` : '入り 不明';
+  const e = entryOf(s), T = beatLen(s);
+  $('#entryInfo').replaceChildren(S.analyzing.has(s.id) ? '解析中…' : e != null ? `入り ${fmt1(e)}` : '入り 不明',
+    s.entryManual != null ? h('span', { class: 'tag' }, '手動') : '');
+  // テンポが分かれば1拍ずつ、分からなければ0.1秒ずつ動かす
+  $('#entryBack').textContent = T ? '−1拍' : '−0.1秒';
+  $('#entryFwd').textContent = T ? '+1拍' : '+0.1秒';
+  $('#entryBack').disabled = $('#entryFwd').disabled = e == null;
   const q = S.queue, i = q.indexOf(s.id);
   const next = S.songs.find((x) => x.id === q[(i + 1) % q.length]);
   $('#nextTitle').textContent = next && next !== s ? next.title : '—';
@@ -790,11 +803,19 @@ function drawWave(t) {
   g.fillRect(x - 1, 0, 2, hgt);
 }
 
-function waveSeek(e) {
+function waveTime(e) {
   const r = $('#wave').getBoundingClientRect();
-  const dur = durSec();
-  if (!dur) return;
-  seek(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur);
+  return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * durSec();
+}
+function waveSeek(e) {
+  if (durSec()) seek(waveTime(e));
+}
+// 指が入りの線から 18px 以内なら、線をつかむ
+function nearEntry(e) {
+  const s = S.cur, ent = s && entryOf(s), dur = durSec();
+  if (ent == null || !dur) return false;
+  const r = $('#wave').getBoundingClientRect();
+  return Math.abs(e.clientX - (r.left + (ent / dur) * r.width)) < 18;
 }
 
 // ---------- 小節カウンター と カウントイン ----------
@@ -920,11 +941,11 @@ function renderEdit() {
       h('h3', {}, '入り', h('span', { class: 'val' }, e != null ? fmt1(e) : '不明'),
         s.entryManual != null ? h('span', { class: 'tag' }, '手動') : null),
       h('div', { class: 'row' },
-        h('button', { disabled: !T || e == null, onclick: () => { s.entryManual = e - T; save(); } }, '−1拍'),
-        h('button', { disabled: !T || e == null, onclick: () => { s.entryManual = e + T; save(); } }, '+1拍'),
-        h('button', { class: 'primary', onclick: () => { s.entryManual = nowSec(); save(); toast('今の位置を入りにしました'); } }, '今の位置を入りに'),
-        h('button', { disabled: s.entryManual == null, onclick: () => { delete s.entryManual; save(); } }, '自動に戻す')),
-      h('p', { class: 'hint' }, '曲を流しながら、ラップが始まった瞬間に「今の位置を入りに」を押すと確実です。')),
+        h('button', { disabled: !T || e == null, onclick: () => { setEntry(s, e - T); renderEdit(); } }, '−1拍'),
+        h('button', { disabled: !T || e == null, onclick: () => { setEntry(s, e + T); renderEdit(); } }, '+1拍'),
+        h('button', { class: 'primary', onclick: () => { setEntry(s, nowSec()); renderEdit(); toast('今の位置を入りにしました'); } }, '今の位置を入りに'),
+        h('button', { disabled: s.entryManual == null, onclick: () => { setEntry(s, null); renderEdit(); } }, '自動に戻す')),
+      h('p', { class: 'hint' }, '曲を流しながら、ラップが始まった瞬間に「今の位置を入りに」を押すと確実です。プレイヤーの波形の「入り」の線も、指でつかんで動かせます。')),
     h('section', {},
       h('h3', {}, 'テンポ', h('span', { class: 'val' }, bpm ? `${bpm.toFixed(1)} BPM` : '--'),
         s.bpmManual ? h('span', { class: 'tag' }, '手動') : null),
@@ -1089,8 +1110,27 @@ async function init() {
   $('#edit').addEventListener('click', () => { renderEdit(); openPanel('#editPanel'); });
   document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closePanel));
   const wave = $('#wave');
-  wave.addEventListener('pointerdown', (e) => { wave.setPointerCapture(e.pointerId); waveSeek(e); });
-  wave.addEventListener('pointermove', (e) => { if (wave.hasPointerCapture(e.pointerId)) waveSeek(e); });
+  let dragEntry = false;
+  wave.addEventListener('pointerdown', (e) => {
+    wave.setPointerCapture(e.pointerId);
+    dragEntry = nearEntry(e);
+    if (dragEntry) S.cur.entryManual = waveTime(e); else waveSeek(e);
+  });
+  wave.addEventListener('pointermove', (e) => {
+    if (!wave.hasPointerCapture(e.pointerId)) return;
+    if (dragEntry) { S.cur.entryManual = waveTime(e); renderPlayerInfo(); } else waveSeek(e);
+  });
+  const dropEntry = () => {
+    if (!dragEntry) return;
+    dragEntry = false;
+    setEntry(S.cur, S.cur.entryManual);
+    toast(`入りを ${fmt1(entryOf(S.cur))} にしました`);
+  };
+  wave.addEventListener('pointerup', dropEntry);
+  wave.addEventListener('pointercancel', dropEntry);
+  $('#entryBack').addEventListener('click', () => { const s = S.cur, e = entryOf(s); setEntry(s, e - (beatLen(s) || 0.1)); });
+  $('#entryFwd').addEventListener('click', () => { const s = S.cur, e = entryOf(s); setEntry(s, e + (beatLen(s) || 0.1)); });
+  $('#entryHere').addEventListener('click', () => { setEntry(S.cur, nowSec()); toast('今の位置を入りにしました'); });
   window.addEventListener('resize', () => S.cur && buildWave());
   // iPhone の Safari でピンチの拡大を止める
   document.addEventListener('gesturestart', (e) => e.preventDefault());
