@@ -1094,7 +1094,17 @@ async function init() {
   window.addEventListener('resize', () => S.cur && buildWave());
   // iPhone の Safari でピンチの拡大を止める
   document.addEventListener('gesturestart', (e) => e.preventDefault());
-  // キーボードで入力欄が隠れないように
+  // キーボードで入力欄が隠れないように。開いた画面は見えている所だけの大きさにする
+  const vv = window.visualViewport;
+  if (vv) {
+    const fit = () => {
+      document.documentElement.style.setProperty('--vv-top', `${vv.offsetTop}px`);
+      document.documentElement.style.setProperty('--vv-h', `${vv.height}px`);
+    };
+    vv.addEventListener('resize', fit);
+    vv.addEventListener('scroll', fit);
+    fit();
+  }
   document.addEventListener('focusin', (e) => {
     if (e.target.matches('input, select')) setTimeout(() => e.target.scrollIntoView({ block: 'nearest' }), 300);
   });

@@ -9,6 +9,16 @@
 <meta name="apple-mobile-web-app-title" content="ラップデッキ">
 <meta name="theme-color" content="#0b0b0f">
 <title>ラップデッキ</title>
+<!-- 共有したときの絵と字（絵の元は 共有画像/og.html） -->
+<meta name="description" content="ラップが始まる所を、数えて教えるビートプレイヤー。">
+<meta property="og:type" content="website">
+<meta property="og:title" content="ラップデッキ">
+<meta property="og:description" content="ラップが始まる所を、数えて教えるビートプレイヤー。">
+<meta property="og:url" content="https://olive10ma10.github.io/rap-deck/">
+<meta property="og:image" content="https://olive10ma10.github.io/rap-deck/og.png?v=1">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
@@ -27,7 +37,7 @@
 
   <div id="install" class="notice" hidden>
     <span data-icon="smartphone"></span>
-    <p>共有ボタン <span class="inline-ic" data-icon="share"></span> →「ホーム画面に追加」から開くと、電波が無くても使えて、保存した曲も消えにくくなります。Safari とホーム画面のアプリでは保存場所が別なので、曲はホーム画面のアプリで追加してください。</p>
+    <p>共有 <span class="inline-ic" data-icon="share"></span> →「ホーム画面に追加」から開いて、曲を入れてください。電波が無くても使え、曲も消えにくくなります。</p>
     <button id="installClose" class="icon-btn" aria-label="閉じる" data-icon="x"></button>
   </div>
 
@@ -87,7 +97,7 @@
     <!-- 聴く：画面を消しても流れる -->
     <div class="listen">
       <div class="cover"><span id="coverTitle"></span><div class="count"></div></div>
-      <p class="hint center">画面を消しても流れ続けます。ロック画面からも操作できます。</p>
+      <p class="hint center">画面を消しても止まりません。<br>ロック画面からも操作できます。</p>
       <div class="next-row">
         <div class="next-info"><small>次の曲</small><span id="nextTitle">—</span></div>
         <button id="nextBtn" class="icon-btn" aria-label="次の曲" data-icon="skip-forward"></button>
